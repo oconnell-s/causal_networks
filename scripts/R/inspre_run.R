@@ -8,16 +8,6 @@ tce <- read.table("/sc/arion/projects/psychgen/causal_networks_redux/tce_unannot
 tce_se <- read.table("/sc/arion/projects/psychgen/causal_networks_redux/tce_se_unannotated.csv",sep='\t',header=T,row.names=1)
 tce_se <- as.matrix(tce_se)
 diag(tce_se) <- NA
-## try different weights function (just allowing no ratio option, or normalization for mean)
-# also not squaring SE
-make_weights_primal <- function(SE) {
-  weights <- 1 / SE
-  weights[is.na(SE)] <- 0
-  infs <- is.infinite(weights)
-  max_weight <- max(weights[!infs])
-  weights[infs] <- max_weight
-  return(weights)
-}
 w <- make_weights(tce_se)
 tce[is.na(tce)] <- 0
 res<-inspre::fit_inspre_from_R(as.matrix(tce),w,verbose=2,lambda=seq(lam_min,lam_max,0.001),its=100,solve_its=10,rho=100,cv_folds=10,DAG=T,min_nz=0.001)
