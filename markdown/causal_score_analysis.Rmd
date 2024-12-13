@@ -1,0 +1,137 @@
+---
+title: "total_causal_analysis"
+output: html_document
+date: "2024-11-04"
+---
+
+```{r setup, include=T}
+#install.packages("fmsb")
+library(fmsb)
+## path to big_regress object with true y labels - this is just the Galway file for the sake of example 
+df <- read.csv("work/preds/big_regress_df.csv")
+## define liability r2 function 
+liab_r <- function(P,K,R2N){
+  thd = -qnorm(K,0,1) #threshold on normal distribution which truncates the proportion of #disease prevalence
+  zv = dnorm(thd) #z (normal density)
+  mv = zv/K #mean liability for case
+  theta = mv*(P-K)/(1-K)*(mv*(P-K)/(1-K)-thd) #theta in equation (15)
+  cv = K*(1-K)/zv^2*K*(1-K)/(P*(1-P)) #C in equation (15) 
+  max=1-P^(2*P)*(1-P)^(2*(1-P))
+  R2O=R2N*max #Convert NKR2 back to Cox & Snell R2, equivalent to R2 on observed scale #from a linear model
+  R2 = R2O*cv/(1+R2O*theta*cv) 
+  R2 #R2 on the liability scale
+  return(R2*100) #R2 as a %
+}
+## this is assuming that case status is coded as 0,1 and also that it is called Dx
+case_prev <- sum(df$Dx) / dim(df)[1]
+pop_prev <- 0.02 ## assumed global population prevalence of BD
+print("preamble finished")
+```
+
+## deriving variance explained
+
+The following chunks will calculate the $R^2$ on the liability scale for a null model, which is the case status regressed against the significant covariates previously determined, and the **full** model, which is the model including the causal $\beta$ score as a covariate. we will start by running an anova to compare the model fit between both models and then calculating the liability $R^2$. 
+```{r}
+nm <- glm(Dx ~ Age_covariates,family = binomial(),data=df) # null model
+fm <- glm(Dx ~ Age_covariates + dce_scale_score,
+          family = binomial(),data=df) # full model
+# two models defined
+# extract coefficients from full model and also run comparison of model fits
+true.p <- anova(nm,fm)[[5]][2]
+summary(fm)
+print(paste("anova p-value:", true.p))
+NagelkerkeR2(nm)
+```
+
+
+### liability calc 
+
+```{r}
+var_explained <- liab_r(case_prev,pop_prev,NagelkerkeR2(fm)$R2 - NagelkerkeR2(nm)$R2)
+
+print(paste("variance explained by causal beta score:",var_explained, "%"))
+```
+
+
+
+## deriving empirical p-values 
+
+this chunk will obtain an empirical p-value distribution for the observed p-values by refitting the model with shuffled case-control labels.
+```{r}
+n <- 1000
+emp_p <- c()
+for (i in 1:n) {
+  df$shuf_y <- sample(df$Dx) # randomize
+  
+  emp.nm <- glm(shuf_y ~ Age_covariates,family = binomial(),
+            data=df)
+  emp.fm <- glm(shuf_y ~ Age_covariates + dce_scale_score,
+            family = binomial(),
+            data=df)
+  emp_p[i] <- anova(emp.nm,emp.fm)[[5]][2]
+}
+sum(emp_p <= true.p) / (n+1)
+
+
+```
+
+### r2 redux
+
+this chunk will compare r2 values between dce and tce causal $\beta$ score estimates using the *r2redux* package. This procedure is broadly similar to the anova model comparison setup - first you define a null model and a full model that includes the score - the null model in this case is the main predictor we are interested in with the effect of the included covariates regressed out. It can all be run from the big_regress_df.csv which should also have a derived tce score.
+
+```{r}
+#install.packages("r2redux")
+library(r2redux)
+
+# here the list of covariates will likely change - just galway example
+moddce <- lm(dce_scale_score ~ Age_covariates, data=df)
+summary(moddce)
+modtce <- lm(tce_scale_score ~ Age_covariates, data=df)
+df$pheno_dce <- resid(moddce)
+df$pheno_tce <- resid(modtce)
+modage <- glm(Dx ~ Age_covariates,data=df,family = binomial())
+df$resid_pheno <- resid(modage)
+r2df = df[,c('resid_pheno','pheno_dce','pheno_tce')]
+total_n <- dim(df)[1]
+r2_diff(r2df,c(1),c(2),total_n) # funny syntax in the package but this just runs the comparison  
+```
+
+
+
+### same for tce weights 
+
+
+```{r}
+nm <- glm(Dx ~ Age_covariates,family = binomial(),data=df) # null model
+fm <- glm(Dx ~ Age_covariates + tce_scale_score,
+          family = binomial(),data=df) # full model
+# two models defined
+# extract coefficients from full model and also run comparison of model fits
+true.p <- anova(nm,fm)[[5]][2]
+summary(fm)
+print(paste("anova p-value:", true.p))
+NagelkerkeR2(nm)
+```
+```{r}
+var_explained <- liab_r(case_prev,pop_prev,NagelkerkeR2(fm)$R2 - NagelkerkeR2(nm)$R2)
+
+print(paste("variance explained by causal beta score (tce):",var_explained, "%"))
+```
+```{r}
+## empirical P for S calculated using tce score 
+n <- 1000
+emp_p <- c()
+for (i in 1:n) {
+  df$shuf_y <- sample(df$Dx) # randomize
+  
+  emp.nm <- glm(shuf_y ~ Age_covariates,family = binomial(),
+            data=df)
+  emp.fm <- glm(shuf_y ~ Age_covariates + tce_scale_score,
+            family = binomial(),
+            data=df)
+  emp_p[i] <- anova(emp.nm,emp.fm)[[5]][2]
+}
+sum(emp_p <= true.p) / (n+1)
+
+```
+
